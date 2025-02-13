@@ -3,10 +3,10 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"encoding/json"
-	"net/http"
 	"os"
 	"strings"
+
+	"github.com/donaldnguyen99/pokedexcli/internal/pokeapi"
 )
 
 func cleanInput(text string) []string {
@@ -15,7 +15,10 @@ func cleanInput(text string) []string {
 		if word == "" {
 			continue
 		}
-		textSlice = append(textSlice, strings.ToLower(strings.Trim(word, " ")))
+		textSlice = append(
+			textSlice, 
+			strings.ToLower(strings.Trim(word, " ")),
+		)
 	}
 	
 	return textSlice
@@ -59,38 +62,20 @@ func commandMapNextPage(goToNextPage bool) error {
 		fullURL = commands[mapCommand].config.Previous
 	}
 
-	req, err := http.NewRequest("GET", fullURL, nil)
+	locationAreasPage, err := locationAreasManager.GetLocationAreasPage(
+		fullURL,
+	)
 	if err != nil {
-		return err
+		return fmt.Errorf("error getting location areas page: %v", err)
 	}
-	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-	var locationArea struct {
-		Next     string     `json:"next"`
-		Previous string     `json:"previous"`
-		Results  []struct {
-			Name string `json:"name"`
-			URL  string `json:"url"`
-		} `json:"results"`
-	}
-	decoder := json.NewDecoder(resp.Body)
-	if err := decoder.Decode(&locationArea); err != nil {
-		return err
-	}
-	commands[mapCommand].config.Next = locationArea.Next
-	commands[mapCommand].config.Previous = locationArea.Previous
 
-	for _, location := range locationArea.Results {
-		urlSplit := strings.Split(location.URL, "/")
-		id := urlSplit[len(urlSplit)-2]
-		fmt.Printf("%s. %s\n", id, location.Name)
+	commands[mapCommand].config.Next = locationAreasPage.Next
+	commands[mapCommand].config.Previous = locationAreasPage.Previous
+
+	for _, location := range locationAreasPage.Results {
+		// urlSplit := strings.Split(location.URL, "/")
+		// id := urlSplit[len(urlSplit)-2]
+		fmt.Printf("%s\n", location.Name)
 	}
 	return nil
 }
@@ -115,13 +100,16 @@ type config struct {
 	Previous string
 }
 
+// These globals aren't ideal, but they'll do for now.
 var commands map[string]cliCommand
+var locationAreasManager *pokeapi.LocationAreasManager
 
 func main() {
 	
 	scanner :=bufio.NewScanner(os.Stdin)
+	locationAreasManager = pokeapi.NewLocationAreasManager()
 	map_config := &config{
-		Next:     "https://pokeapi.co/api/v2/location-area?offset=0&limit=20",
+		Next:     locationAreasManager.GetLocationAreasPageURL(),
 		Previous: "",
 	}
 	commands = map[string]cliCommand{
@@ -150,15 +138,15 @@ func main() {
 			config:      map_config,
 		},
 	}
-	fmt.Printf("Pokedex > ")
-	for ; scanner.Scan(); fmt.Printf("Pokedex > ") {
+
+	// Start REPL
+	for fmt.Printf("Pokedex > "); scanner.Scan(); fmt.Printf("Pokedex > ") {
 		if err := scanner.Err(); err != nil {
 			fmt.Fprintln(os.Stderr, "reading standard input:", err)
 		}
 		
 		text := scanner.Text()
 		words := cleanInput(text)
-		
 
 		if len(words) == 0 {
 			continue
@@ -170,7 +158,11 @@ func main() {
 		}
 		err := command.callback()
 		if err != nil {
-			fmt.Printf("Error while executing %s command: %v\n", command.name, err)
+			fmt.Printf(
+				"Error while executing %s command: %v\n", 
+				command.name, 
+				err,
+			)
 			continue
 		}
 	}
