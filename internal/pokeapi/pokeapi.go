@@ -50,7 +50,7 @@ func NewLocationAreasManager() *LocationAreasManager {
 		BaseURL: locationAreasPageBaseURL,
 		Offset:  locationAreasPageOffset,
 		Limit:   locationAreasPageLimit,
-		Cache:   pokecache.NewCache(5 * time.Minute),
+		Cache:   pokecache.NewCache(5 * time.Second),
 	}
 }
 
