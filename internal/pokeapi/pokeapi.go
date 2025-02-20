@@ -11,82 +11,64 @@ import (
 	"github.com/donaldnguyen99/pokedexcli/internal/pokecache"
 )
 
-const (
-	locationAreasPageBaseURL = "https://pokeapi.co/api/v2/location-area"
-	locationAreasPageOffset  = 0
-	locationAreasPageLimit   = 20
-)
-
-func GetLocationAreasPageURL(baseURL string, offset, limit int) string {
-	return fmt.Sprintf("%s?offset=%d&limit=%d", baseURL, offset, limit)
+type PokeAPIWrapper struct {
+	MapConfig   config
+	Cache       *pokecache.Cache
 }
 
-func GetLocationAreasPageDefaultURL() string {
-	return GetLocationAreasPageURL(
-		locationAreasPageBaseURL,
-		locationAreasPageOffset,
-		locationAreasPageLimit,
-	)
+type config struct {
+	Next     string
+	Previous string
 }
 
-type LocationAreasPage struct {
+type NamedAPIResourceList struct {
+	Count    int    `json:"count"`
 	Next     string `json:"next"`
 	Previous string `json:"previous"`
-	Results  []struct {
-		Name string `json:"name"`
-		URL  string `json:"url"`
-	} `json:"results"`
+	Results  []NamedAPIResource `json:"results"`
 }
 
-type LocationAreasManager struct {
-	BaseURL string
-	Offset  int
-	Limit   int
-	Cache   *pokecache.Cache
+type NamedAPIResource struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
-func NewLocationAreasManager() *LocationAreasManager {
-	return &LocationAreasManager{
-		BaseURL: locationAreasPageBaseURL,
-		Offset:  locationAreasPageOffset,
-		Limit:   locationAreasPageLimit,
-		Cache:   pokecache.NewCache(5 * time.Second),
+func NewPokeAPIWrapper(cacheInterval time.Duration) *PokeAPIWrapper {
+	return &PokeAPIWrapper{
+		Cache: pokecache.NewCache(cacheInterval),
 	}
 }
 
-func (m *LocationAreasManager) GetLocationAreasPageURL() string {
-	return fmt.Sprintf("%s?offset=%d&limit=%d", m.BaseURL, m.Offset, m.Limit)
-}
-
-func (m *LocationAreasManager) GetLocationAreasPage(
-	fullURL string,
-) (LocationAreasPage, error) {
-
-	cachedData, ok := m.Cache.Get(fullURL)
+func getStructFromURL[T any](fullURL string, cache *pokecache.Cache) (T, error) {
+	cachedData, ok := cache.Get(fullURL)
 	if ok {
-		var locationArea LocationAreasPage
-		err := json.Unmarshal(cachedData, &locationArea)
+		var result T
+		err := json.Unmarshal(cachedData, &result)
 		if err != nil {
-			return LocationAreasPage{}, fmt.Errorf("Error unmarshalling cached data: \n%v", err)
+			var noop T
+			return noop, fmt.Errorf("error unmarshalling cached data: \n%v", err)
 		}
-		return locationArea, nil
+		return result, nil
 	}
 
 	req, err := http.NewRequest("GET", fullURL, nil)
 	if err != nil {
-		return LocationAreasPage{}, err
+		var noop T
+		return noop, err
 	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return LocationAreasPage{}, err
+		var noop T
+		return noop, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return LocationAreasPage{}, fmt.Errorf(
-			"Unexpected status code: %d", 
+		var noop T
+		return noop, fmt.Errorf(
+			"unexpected status code: %d", 
 			resp.StatusCode,
 		)
 	}
@@ -95,15 +77,38 @@ func (m *LocationAreasManager) GetLocationAreasPage(
 	// Read the response body into a byte slice
 	dataToCache, err = io.ReadAll(resp.Body)
 	if err != nil {
-		return LocationAreasPage{}, fmt.Errorf("Error reading response body: \n%v", err)
+		var noop T
+		return noop, fmt.Errorf("error reading response body: \n%v", err)
 	}
-	m.Cache.Add(fullURL, dataToCache)
+	cache.Add(fullURL, dataToCache)
 
 
-	var locationArea LocationAreasPage
+	var result T
 	decoder := json.NewDecoder(bytes.NewReader(dataToCache))
-	if err := decoder.Decode(&locationArea); err != nil {
-		return LocationAreasPage{}, fmt.Errorf("Error decoding JSON: \n%v", err)
+	if err := decoder.Decode(&result); err != nil {
+		var noop T
+		return noop, fmt.Errorf("error decoding JSON: \n%v", err)
 	}
-	return locationArea, nil
+	return result, nil
+}
+
+func (p *PokeAPIWrapper) GetNamedAPIResourceList(fullURL string) (NamedAPIResourceList, error) {
+	n, err := getStructFromURL[NamedAPIResourceList](fullURL, p.Cache)
+	if err != nil {
+		return NamedAPIResourceList{}, fmt.Errorf(
+			"failed to get named API resource list from URL %s: %w", 
+			fullURL, err,
+		)
+	}
+	return n, nil
+}
+
+func (p *PokeAPIWrapper) GetLocationArea(fullURL string) (LocationArea, error) {
+	l, err := getStructFromURL[LocationArea](fullURL, p.Cache)
+	if err != nil {
+		return LocationArea{}, fmt.Errorf(
+			"failed to get location area from URL %s: %w",  fullURL, err,
+		)
+	}
+	return l, nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/donaldnguyen99/pokedexcli/internal/pokeapi"
 )
@@ -24,13 +25,13 @@ func cleanInput(text string) []string {
 	return textSlice
 }
 
-func commandExit() error {
+func commandExit(...string) error {
 	fmt.Println("Closing the Pokedex... Goodbye!")
 	os.Exit(0)
 	return nil
 }
 
-func commandHelp() error {
+func commandHelp(...string) error {
 	if len(commands) == 0 {
 		return fmt.Errorf("no commands available")
 	}
@@ -48,29 +49,29 @@ func commandMapNextPage(goToNextPage bool) error {
 	var mapCommand string
 	if goToNextPage {
 		mapCommand = "map"
-		if commands[mapCommand].config.Next == "" {
+		if commands[mapCommand].api.MapConfig.Next == "" {
 			fmt.Println("you're on the last page")
 			return nil
 		}
-		fullURL = commands[mapCommand].config.Next
+		fullURL = commands[mapCommand].api.MapConfig.Next
 	} else {
 		mapCommand = "mapb"
-		if commands[mapCommand].config.Previous == "" {
+		if commands[mapCommand].api.MapConfig.Previous == "" {
 			fmt.Println("you're on the first page")
 			return nil
 		}
-		fullURL = commands[mapCommand].config.Previous
+		fullURL = commands[mapCommand].api.MapConfig.Previous
 	}
 
-	locationAreasPage, err := locationAreasManager.GetLocationAreasPage(
+	locationAreasPage, err := pokeAPIWrapper.GetNamedAPIResourceList(
 		fullURL,
 	)
 	if err != nil {
 		return fmt.Errorf("error getting location areas page: %v", err)
 	}
 
-	commands[mapCommand].config.Next = locationAreasPage.Next
-	commands[mapCommand].config.Previous = locationAreasPage.Previous
+	commands[mapCommand].api.MapConfig.Next = locationAreasPage.Next
+	commands[mapCommand].api.MapConfig.Previous = locationAreasPage.Previous
 
 	for _, location := range locationAreasPage.Results {
 		// urlSplit := strings.Split(location.URL, "/")
@@ -80,62 +81,104 @@ func commandMapNextPage(goToNextPage bool) error {
 	return nil
 }
 
-func commandMap() error {
+func commandMap(...string) error {
 	return commandMapNextPage(true)
 }
 
-func commandMapb() error {
+func commandMapb(...string) error {
 	return commandMapNextPage(false)
+}
+
+func commandExplore(params ...string) error {
+	fullURL := pokeapi.GetLocationAreaURLByName(params[0])
+	locationArea, err := pokeAPIWrapper.GetLocationArea(fullURL)
+	fmt.Printf("Exploring %s...\n", locationArea.Name)
+	if err != nil {
+		return fmt.Errorf("error getting location area: %v", err)
+	}
+	fmt.Println("Found Pokemon:")
+	for _, encounter := range locationArea.PokemonEncounters {
+		fmt.Printf(" - %s\n", encounter.Pokemon.Name)
+	}
+	return nil
+}
+
+func verifyCallbackParams(commmand string, params []string) error {
+	switch commmand {
+	case "help":
+		fallthrough
+	case "exit":
+		fallthrough
+	case "map":
+		fallthrough
+	case "mapb":
+		if len(params) > 0 {
+			return fmt.Errorf("help %s does not take any arguments", commmand)
+		}
+	case "explore":
+		if len(params) != 1{
+			return fmt.Errorf("explore %s requires 1 argument", commmand)
+		}
+	default:
+		return fmt.Errorf("invalid command %s", commmand)
+	}
+	return nil
 }
 
 type cliCommand struct {
 	name        string
 	description string
-	callback    func() error
-	config      *config
+	callback    func(...string) error
+	callbackParams []string
+	api      *pokeapi.PokeAPIWrapper
 }
 
-type config struct {
-	Next     string
-	Previous string
-}
 
 // These globals aren't ideal, but they'll do for now.
 var commands map[string]cliCommand
-var locationAreasManager *pokeapi.LocationAreasManager
+var pokeAPIWrapper *pokeapi.PokeAPIWrapper
 
 func main() {
 	
 	scanner :=bufio.NewScanner(os.Stdin)
-	locationAreasManager = pokeapi.NewLocationAreasManager()
-	map_config := &config{
-		Next:     locationAreasManager.GetLocationAreasPageURL(),
-		Previous: "",
-	}
+	pokeAPIWrapper = pokeapi.NewPokeAPIWrapper(5 * time.Second)
+	locationAreasConfig := pokeapi.NewLocationAreasConfig(pokeAPIWrapper) // defaults to first page of first 20 locations
+	pokeAPIWrapper.MapConfig.Next = locationAreasConfig.GetLocationAreasPageURL()
 	commands = map[string]cliCommand{
 		"help": {
 			name:        "help",
 			description: "Displays a help message",
 			callback:    commandHelp,
-			config:      nil,
+			callbackParams: nil,
+			api:      nil,
 		},
 		"exit": {
 			name:        "exit",
 			description: "Exit the Pokedex",
 			callback:    commandExit,
-			config:      nil,
+			callbackParams: nil,
+			api:      nil,
 		},
 		"map": {
 			name:        "map",
 			description: "Displays the names of 20 locations in the Pokemon world or the next 20 locations.",
 			callback:    commandMap,
-			config:      map_config,
+			callbackParams: nil,
+			api:         pokeAPIWrapper,
 		},
 		"mapb": {
 			name:        "mapb",
 			description: "Displays the names of previous 20 locations in the Pokemon world.",
 			callback:    commandMapb,
-			config:      map_config,
+			callbackParams: nil,
+			api:         pokeAPIWrapper,
+		},
+		"explore": {
+			name:        "explore",
+			description: "Displays the names of the Pokemon in a specified location area.",
+			callback:    commandExplore,
+			callbackParams: []string{},
+			api:         pokeAPIWrapper,
 		},
 	}
 
@@ -156,14 +199,34 @@ func main() {
 			fmt.Println("Invalid command. Please try again.")
 			continue
 		}
-		err := command.callback()
-		if err != nil {
-			fmt.Printf(
-				"Error while executing %s command: %v\n", 
-				command.name, 
-				err,
-			)
-			continue
+		if len(words) > 1 {
+			command.callbackParams = words[1:]
+			err := verifyCallbackParams(command.name, command.callbackParams)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				continue
+			}
+
+			err = command.callback(command.callbackParams...)
+			if err != nil {
+				fmt.Printf(
+					"Error while executing %s command with arguments %s: %v\n", 
+					command.name, 
+					strings.Join(words[1:], " "), 
+					err,
+				)
+				continue
+			}
+		} else {
+			err := command.callback()
+			if err != nil {
+				fmt.Printf(
+					"Error while executing %s command: %v\n", 
+					command.name, 
+					err,
+				)
+				continue
+			}
 		}
 	}
 }
