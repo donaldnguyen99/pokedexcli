@@ -33,7 +33,7 @@ type LocationArea struct {
 	// 	Name string `json:"name"`
 	// } `json:"names"`
 	PokemonEncounters []struct {
-		Pokemon Pokemon `json:"pokemon"`
+		Pokemon NamedAPIResource `json:"pokemon"`
 		//  VersionDetails []struct {
 		// 	EncounterDetails []struct {
 		// 		Chance          int   `json:"chance"`

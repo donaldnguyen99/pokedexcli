@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"math/rand"
 	"os"
 	"strings"
 	"time"
@@ -63,7 +64,7 @@ func commandMapNextPage(goToNextPage bool) error {
 		fullURL = commands[mapCommand].api.MapConfig.Previous
 	}
 
-	locationAreasPage, err := pokeAPIWrapper.GetNamedAPIResourceList(
+	locationAreasPage, err := commands[mapCommand].api.GetNamedAPIResourceList(
 		fullURL,
 	)
 	if err != nil {
@@ -91,11 +92,11 @@ func commandMapb(...string) error {
 
 func commandExplore(params ...string) error {
 	fullURL := pokeapi.GetLocationAreaURLByName(params[0])
-	locationArea, err := pokeAPIWrapper.GetLocationArea(fullURL)
-	fmt.Printf("Exploring %s...\n", locationArea.Name)
+	locationArea, err := commands["explore"].api.GetLocationArea(fullURL)
 	if err != nil {
 		return fmt.Errorf("error getting location area: %v", err)
 	}
+	fmt.Printf("Exploring %s...\n", locationArea.Name)
 	fmt.Println("Found Pokemon:")
 	for _, encounter := range locationArea.PokemonEncounters {
 		fmt.Printf(" - %s\n", encounter.Pokemon.Name)
@@ -103,7 +104,55 @@ func commandExplore(params ...string) error {
 	return nil
 }
 
+func commandCatch(params ...string) error {
+	fullURL := pokeapi.GetPokemonURLByName(params[0])
+	fmt.Printf("Throwing a Pokeball at %s...\n", params[0])
+	pokemon, err := commands["catch"].api.GetPokemon(fullURL)
+	if err != nil {
+		return fmt.Errorf("error getting pokemon: %v", err)
+	}
+
+	randInt := rand.Intn(1000)
+	pokemonCatchRate := (pokemon.BaseExperience - 36) * 600 / (635 - 36 + 1) + 400
+	if randInt > pokemonCatchRate {// 36 - 608
+		fmt.Printf("%s was caught!\n", pokemon.Name)
+		commands["catch"].api.CaughtPokemons[pokemon.Name] = pokemon
+	} else {
+		fmt.Printf("%s escaped!\n", pokemon.Name)
+	}
+	return nil
+}
+
+func commandInspect(params ...string) error {
+	pokemon, ok := commands["inspect"].api.CaughtPokemons[params[0]]
+	if !ok {
+		fmt.Println("you have not caught that pokemon")
+		return nil
+	}
+	fmt.Printf("Name: %s\n", pokemon.Name)
+	fmt.Printf("Height: %d\n", pokemon.Height)
+	fmt.Printf("Weight: %d\n", pokemon.Weight)
+	fmt.Println("Stats:")
+	for _, stat := range pokemon.Stats {
+		fmt.Printf("  -%s: %d\n", stat.Stat.Name, stat.BaseStat)
+	}
+	fmt.Println("Types:")
+	for _, types := range pokemon.Types {
+		fmt.Printf("  - %s\n", types.Type.Name)
+	}
+	return nil
+}
+
+func commandPokedex(...string) error {
+	fmt.Println("Your pokedex:")
+	for _, pokemon := range commands["pokedex"].api.CaughtPokemons {
+		fmt.Printf(" - %s\n", pokemon.Name)
+	}
+	return nil
+}
+
 func verifyCallbackParams(commmand string, params []string) error {
+	
 	switch commmand {
 	case "help":
 		fallthrough
@@ -112,12 +161,18 @@ func verifyCallbackParams(commmand string, params []string) error {
 	case "map":
 		fallthrough
 	case "mapb":
+		fallthrough
+	case "pokedex":
 		if len(params) > 0 {
-			return fmt.Errorf("help %s does not take any arguments", commmand)
+			return fmt.Errorf("%s does not take any arguments", commmand)
 		}
 	case "explore":
-		if len(params) != 1{
-			return fmt.Errorf("explore %s requires 1 argument", commmand)
+		fallthrough
+	case "catch":
+		fallthrough
+	case "inspect":
+		if len(params) != 1 {
+			return fmt.Errorf("%s requires 1 argument", commmand)
 		}
 	default:
 		return fmt.Errorf("invalid command %s", commmand)
@@ -180,6 +235,27 @@ func main() {
 			callbackParams: []string{},
 			api:         pokeAPIWrapper,
 		},
+		"catch": {
+			name:        "catch",
+			description: "Catches a Pokemon in a current location area.",
+			callback:    commandCatch,
+			callbackParams: []string{},
+			api:         pokeAPIWrapper,
+		},
+		"inspect": {
+			name:        "inspect",
+			description: "Displays the details of a caught Pokemon.",
+			callback:    commandInspect,
+			callbackParams: []string{},
+			api:         pokeAPIWrapper,
+		},
+		"pokedex": {
+			name:        "pokedex",
+			description: "Displays the names of all the Pokemon in your Pokedex.",
+			callback:    commandPokedex,
+			callbackParams: nil,
+			api:         pokeAPIWrapper,
+		},
 	}
 
 	// Start REPL
@@ -199,14 +275,14 @@ func main() {
 			fmt.Println("Invalid command. Please try again.")
 			continue
 		}
-		if len(words) > 1 {
-			command.callbackParams = words[1:]
-			err := verifyCallbackParams(command.name, command.callbackParams)
-			if err != nil {
-				fmt.Printf("Error: %v\n", err)
-				continue
-			}
+		command.callbackParams = words[1:]
+		err := verifyCallbackParams(command.name, command.callbackParams)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			continue
+		}
 
+		if len(command.callbackParams) > 0 {
 			err = command.callback(command.callbackParams...)
 			if err != nil {
 				fmt.Printf(
@@ -218,7 +294,7 @@ func main() {
 				continue
 			}
 		} else {
-			err := command.callback()
+			err = command.callback()
 			if err != nil {
 				fmt.Printf(
 					"Error while executing %s command: %v\n", 

@@ -5,15 +5,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"time"
 
 	"github.com/donaldnguyen99/pokedexcli/internal/pokecache"
 )
 
+const (
+	baseURL = "https://pokeapi.co/api/v2"
+)
+
 type PokeAPIWrapper struct {
+	BaseURL	    string
 	MapConfig   config
 	Cache       *pokecache.Cache
+	CaughtPokemons map[string]Pokemon
 }
 
 type config struct {
@@ -35,7 +42,13 @@ type NamedAPIResource struct {
 
 func NewPokeAPIWrapper(cacheInterval time.Duration) *PokeAPIWrapper {
 	return &PokeAPIWrapper{
+		BaseURL: baseURL,
+		MapConfig: config{
+			Next: "",
+			Previous: "",
+		},
 		Cache: pokecache.NewCache(cacheInterval),
+		CaughtPokemons: make(map[string]Pokemon),
 	}
 }
 
@@ -111,4 +124,47 @@ func (p *PokeAPIWrapper) GetLocationArea(fullURL string) (LocationArea, error) {
 		)
 	}
 	return l, nil
+}
+
+func (p *PokeAPIWrapper) GetPokemon(fullURL string) (Pokemon, error) {
+	pokemon, err := getStructFromURL[Pokemon](fullURL, p.Cache)
+	if err != nil {
+		return Pokemon{}, fmt.Errorf(
+			"failed to get pokemon from URL %s: %w",  fullURL, err,
+		)
+	}
+	return pokemon, nil
+}
+
+func (p *PokeAPIWrapper) GetAllPokemon() ([]Pokemon, error) {
+	pokemonList, err := p.GetNamedAPIResourceList("https://pokeapi.co/api/v2/pokemon?limit=100000&offset=0")
+	if err != nil {
+		return []Pokemon{}, fmt.Errorf(
+			"failed to get all pokemon: %w", err,
+		)
+	}
+	pokemons := make([]Pokemon, len(pokemonList.Results))
+	for i, pokemon := range pokemonList.Results {
+		pokemons[i], err = p.GetPokemon(pokemon.URL)
+		if err != nil {
+			return []Pokemon{}, fmt.Errorf(
+				"failed to get pokemon %s: %w", pokemon.Name, err,
+			)
+		}
+	}
+	return pokemons, nil
+}
+
+func FindMinMaxBaseExperience(pokemons []Pokemon) (int, int) {
+	min := math.MaxInt
+	max := 0
+	for _, pokemon := range pokemons {
+		if pokemon.BaseExperience < min {
+			min = pokemon.BaseExperience
+		}
+		if pokemon.BaseExperience > max {
+			max = pokemon.BaseExperience
+		}
+	}
+	return min, max
 }
